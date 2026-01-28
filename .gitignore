@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Venv
+.venv/
+env/
+venv/
+
+# VS code settings
+.vscode/
+
+# Mac system 
+.DS_Store
