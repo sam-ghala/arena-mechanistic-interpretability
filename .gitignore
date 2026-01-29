@@ -13,3 +13,11 @@ venv/
 
 # Mac system 
 .DS_Store
+
+# Weights and Biases
+wandb/
+*.wandb
+.wandb
+
+# General Logs
+*.log
