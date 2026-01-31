@@ -38,7 +38,7 @@ from transformer_lens.hook_points import HookPoint
 
 # Visualization
 import circuitsvis as cv
-from arena_plotting import imshow, plot_loss_difference
+from arena_plotting import imshow, plot_loss_difference, plot_logit_attribution
 
 # Device Setup (Standard boilerplate)
 device = t.device("mps" if t.backends.mps.is_available() else "cuda" if t.cuda.is_available() else "cpu")
@@ -84,7 +84,7 @@ print(type(gpt2_logits), type(gpt2_cache))
 attn_patterns_from_shorthand = gpt2_cache["pattern", 0]
 attn_patterns_from_full_name = gpt2_cache["blocks.0.attn.hook_pattern"]
 print(type(attn_patterns_from_shorthand), attn_patterns_from_shorthand.shape)
-print(gpt2_tokens.shape)
+print(gpt2_tokens.shape, gpt2_logits.shape)
 t.testing.assert_close(attn_patterns_from_shorthand, attn_patterns_from_full_name)
 # The shape is [12, 47, 47]. 47 tokens because the attn pattern is query by keys. and 12 is the number of attn heads 
 
@@ -330,3 +330,101 @@ imshow(
 # 1.4 and 1.10 have high (>0.6) induciton head scores
 
 # %% wow induction heads inside gpt2-small
+def visualize_pattern_hook(
+        pattern : Float[Tensor, "batch head dest_posn source_posn"],
+        hook : HookPoint
+):
+    print("Layer: ", hook.layer())
+    display(cv.attention.attention_heads(tokens=gpt2_small.to_str_tokens(rep_tokens[0]),
+                                            attention=pattern.mean()))
+
+seq_len = 50
+batch_size = 10
+rep_tokens_batch = generate_repeated_tokens(gpt2_small, seq_len, batch_size)
+
+induction_score_store = t.zeros(
+    (gpt2_small.cfg.n_layers, gpt2_small.cfg.n_heads), device=gpt2_small.cfg.device
+)
+
+gpt2_small.run_with_hooks(
+    rep_tokens_batch,
+    return_type=None,
+    fwd_hooks=[(pattern_hook_names_filter, induction_score_hook)]
+)
+# same as before but for gpt2_small
+imshow(
+    induction_score_store,
+    labels={"x":"Head","y":"Layer"},
+    title="Induction Score by Head",
+    text_auto=".1f",
+    width=700,
+    height=500,
+)
+
+induction_head_layers = [5,6,7] # from heatmap
+fwd_hooks = [
+    (utils.get_act_name("pattern", induction_head_layer), visualize_pattern_hook)
+    for induction_head_layer in induction_head_layers
+]
+gpt2_small.run_with_hooks(
+    rep_tokens,
+    return_type=None,
+    fwd_hooks=fwd_hooks
+)
+
+# %% direct attribution to a logit, how each componenet contributes to the output logit
+def logit_attribution(
+        embed: Float[Tensor, "seq d_model"],
+        l1_results : Float[Tensor, "seq n_heads d_model"],
+        l2_results : Float[Tensor, "seq n_heads d_model"],
+        W_U : Float[Tensor, "d_model d_vocab"],
+        tokens : Int[Tensor, "seq"]
+) -> Float[Tensor, "seq-1 n_components"]:
+    """
+    returns:
+        tensor of shape (seq_len-1, n_components)
+        logits attributions from:
+            direct path (seq-1, 1)
+            layer 0 logits (seq-1, n_heads)
+            layer 1 logits (seq-1, n_heads)
+        n_componenets = 1 + 2 * n_heads
+    """
+    W_U_correct_tokens = W_U[:, tokens[1:]]
+    direct_attributions = einops.einsum(W_U_correct_tokens, embed[:-1], "emb seq, seq emb -> seq")
+    l1_attributions = einops.einsum(W_U_correct_tokens, l1_results[:-1], "emb seq, seq n_heads emb -> seq n_heads")
+    l2_attributions = einops.einsum(W_U_correct_tokens, l2_results[:-1], "emb seq, seq n_heads emb -> seq n_heads")
+    return t.concat([direct_attributions.unsqueeze(-1), l1_attributions, l2_attributions], dim=-1)
+
+text = "We think that powerful, significantly superhuman machine intelligence is more likely than not to be created this century. If current machine learning techniques were scaled up to this level, we think they would by default produce systems that are deceptive or manipulative, and that no solid plans are known for how to avoid this."
+logits, cache = model.run_with_cache(text, remove_batch_dim=True)
+str_tokens = model.to_str_tokens(text)
+tokens = model.to_tokens(text)
+
+with t.inference_mode():
+    embed = cache["embed"]
+    l1_results = cache["result", 0]
+    l2_results = cache["result", 1]
+    logit_attr = logit_attribution(embed, l1_results, l2_results, model.W_U, tokens[0])
+    correct_token_logits = logits[0, t.arange(len(tokens[0]) - 1), tokens[0, 1:]]
+    t.testing.assert_close(logit_attr.sum(1), correct_token_logits, atol=1e-3, rtol=0)
+    print("Done.")
+# %% visualize logit attribution for each path
+embed = cache["embed"]
+l1_results = cache["result", 0]
+l2_results = cache["result", 1]
+logit_attr = logit_attribution(embed, l1_results, l2_results, model.W_U, tokens.squeeze())
+
+plot_logit_attribution(model, logit_attr, tokens, title="Logit attribution")
+# high values are tokens that are common bigrams
+# %%
+seq_len = 50
+embed = rep_cache["embed"]
+l1_results = rep_cache["result", 0]
+l2_results = rep_cache["result", 1]
+
+logit_attr = logit_attribution(embed, l1_results, l2_results, model.W_U, rep_tokens.squeeze())
+plot_logit_attribution(model, logit_attr, rep_tokens.squeeze(), title="logit attribution")
+# %% ablate these guys, I've never seen the word ablate used besides in medical contexts
+# set some part of the model to 0, Occam's razor? trying to figure out the smallest possible set that keeps the "feature" we are looking for
+
+ 
