@@ -10,6 +10,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Callable
+import tests
 
 # Scientific & Utilities
 import numpy as np
@@ -426,5 +427,58 @@ logit_attr = logit_attribution(embed, l1_results, l2_results, model.W_U, rep_tok
 plot_logit_attribution(model, logit_attr, rep_tokens.squeeze(), title="logit attribution")
 # %% ablate these guys, I've never seen the word ablate used besides in medical contexts
 # set some part of the model to 0, Occam's razor? trying to figure out the smallest possible set that keeps the "feature" we are looking for
+def head_zero_ablation_hook(
+        z : Float[Tensor, "batch seq n_heads d_head"],
+        # hook : HookPoint,
+        head_index_to_ablate: int
+) -> None:
+    z[:, :, head_index_to_ablate, :] = 0.0
 
- 
+def get_ablation_scores(
+        model : HookedTransformer,
+        tokens : Int[Tensor, "batch seq"],
+        ablation_function : Callable = head_zero_ablation_hook
+) -> Float[Tensor, "n_layers n_heads"]:
+    ablation_scores = t.zeros((model.cfg.n_layers, model.cfg.n_heads), device=model.cfg.device)
+
+    model.reset_hooks()
+    seq_len = (tokens.shape[1] - 1) // 2
+    logits = model(tokens, return_type="logits")
+    loss_no_ablation = -get_log_probs(logits, tokens)[:, -(seq_len - 1) :].mean()
+
+    for layer in tqdm(range(model.cfg.n_layers)):
+        for head in range(model.cfg.n_heads):
+            # temp hook
+            temp_hook_fn = functools.partial(ablation_function, head_index_to_ablate=head)
+            # run model with ablated hooks
+            ablated_logits = model.run_with_hooks(
+                tokens, fwd_hooks=[(utils.get_act_name("z", layer), temp_hook_fn)]
+            )
+            # calculate loss difference
+            loss = -get_log_probs(ablated_logits, tokens)[:, -(seq_len - 1) :].mean()
+            # store result
+            ablation_scores[layer, head] = loss - loss_no_ablation
+
+        return ablation_scores
+
+ablation_scores = get_ablation_scores(model, rep_tokens)
+# print(ablation_scores)
+imshow(
+    ablation_scores,
+    labels={"x":"Head", "y":"Layer", "color":"Logit diff"},
+    title="loss diff after ablating",
+    text_auto=".2f",
+    width=900,
+    height=350
+)
+# %% mean ablation
+
+#%% induction, OV, QK circuits and conceptual problems
+
+#%% OV copying circuit
+
+#%% QK prev-token circuit
+
+#%% K-composition circuit
+
+
