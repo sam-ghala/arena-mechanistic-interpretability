@@ -10,7 +10,6 @@ import os
 import sys
 from pathlib import Path
 from typing import Callable
-import tests
 
 # Scientific & Utilities
 import numpy as np
@@ -471,13 +470,60 @@ imshow(
     width=900,
     height=350
 )
-# %% mean ablation
+# %% mean ablation so that the unimportant heads ahve a value closer to 0
+# if the model was trained with dropout then it is trained to be resistant to "knockout"/0 value ablations
+def head_mean_ablation_hook(
+        z : Float[Tensor, "batch seq n_heads d_head"],
+        hook : HookPoint, # I guess it's good practice to include the hook point when adjusting an activation
+        head_index_to_ablate : int,
+) -> None: 
+    z[:, :, head_index_to_ablate, :] = z[:, :, head_index_to_ablate, :].mean(0)
+
+rep_tokens_batch = run_and_cache_model_repeated_tokens(model, seq_len=50, batch_size=10)[0]
+mean_ablation_scores = get_ablation_scores(
+    model, rep_tokens_batch, ablation_function=head_mean_ablation_hook
+)
+imshow(
+    mean_ablation_scores,
+    labels={"x":"Head", "y":"Layer", "color":"Logit diff"},
+    title="Loss Diff After Mean Ablation",
+    text_auto=".2f",
+    width = 900,
+    height=350,
+)
 
 #%% induction, OV, QK circuits and conceptual problems
+# with repeated sequences of tokens, there are heads with induction pattern diagonal strip with offset seq_len - 1
+# logit attribution to tell which heads were important for getting better predictions
 
+# I can't define the induction circuit at a lower level including circuits but I can define it as heads that show connection to a previous layer head that connects to previous tokens
+# so when the model sees A1 and it saw A B before then it will more likely predict B after seeing A1
+
+# Their summary of the algorithm:
+"""
+Head 0.7 is a previous token head (QK circuit ensures it alwaus attends to the previous token)
+OV circuit of head 0.7 writes a copy of the previous token in a different subspace to the one used by the embedding
+the output of head 0.7 is used by the key input of head 1.10 via K-composition to attend to "the source token whose previous token is the destination token' aka B
+OV circuit of head 1.10 copies the value of the course token to the same output logit (copying from the embedding space, not the 0.7 output subspace (not using V-Composition at all))
+1.4 is also performing the same role as 1.10 (together they are more accurate)
+
+* "Hardest part is computing the attention pattern of the induction head - takes careful composition" * Me: No idea why
+"""
+#%%
+# matricies shapes and interpretations
+# (describe the type of input it takes and what the output represents)
+"""
+W_OV_h = 
+"""
 #%% OV copying circuit
+# one hot encoding, zeros everywhere except one at the index A
+# A^T W_E = embedding vector for A
+# W_OV_h = (W_V_h)(W_O_h) is OV circuit for head h and (W_E)(W_OV_h)(W_U) is the full OV circuit
+# calculating a circuit by mutiplying matricies
 
 #%% QK prev-token circuit
+# W_QK_h = (W_Q_h)(W_K_h)^T is the QK circuit for head h and (W_E)(W_QK_h)(W_E)^T is the full QK circuit
+# order is slightly different from mathematical framework for transformers paper, why? (transformersLens library is different)
 
 #%% K-composition circuit
 
