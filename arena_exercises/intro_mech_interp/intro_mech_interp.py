@@ -521,10 +521,75 @@ W_OV_h =
 # W_OV_h = (W_V_h)(W_O_h) is OV circuit for head h and (W_E)(W_OV_h)(W_U) is the full OV circuit
 # calculating a circuit by mutiplying matricies
 
+# compute OV circuit for 1.4
+head_index = 4
+layer = 1
+
+W_O = model.W_O[layer, head_index]
+W_V = model.W_V[layer, head_index]
+W_E = model.W_E
+W_U = model.W_U
+
+OV_circuit = FactoredMatrix(W_V, W_O)
+full_OV_circuit = W_E @ OV_circuit @ W_U
+
+print(full_OV_circuit.shape)
+print(type(full_OV_circuit))
+
+indices = t.randint(0, model.cfg.d_vocab, (200,))
+full_OV_circuit_sample = full_OV_circuit[indices, indices].AB
+
+imshow(
+    full_OV_circuit_sample,
+    labels={"x":"Logits on output token", "y":"Input token"},
+    title="Full OV circuit for copying head",
+    width=700,
+    height=600
+)
+
+
+#%% complete circuit accuracy 
+def top_1_acc(full_OV_circuit : FactoredMatrix, batch_size: int = 1000) -> float:
+    total = 0
+
+    for indices in t.split(t.arange(full_OV_circuit.shape[0], device=device), batch_size):
+        AB_slice = full_OV_circuit[indices].AB
+        total += (t.argmax(AB_slice, dim=1) == indices).float().sum().item()
+    
+    return total / full_OV_circuit.shape[0]
+
+print(f"Fraction of time that the best logit is on diagonal: {top_1_acc}(full_OV_circuit):.4f}")
+
+#%% compite effective circuit
+W_O_both = einops.rearrange(model.W_O[1, [4, 10]], "ehad d_head d_model -> (head d_head) d_model")
+W_V_both = einops.rearrange(model.W_V[1, [4, 10]], "ehad d_head d_model -> head (d_head d_model)")
+
+W_OV_eff = W_E @ FactoredMatrix(W_V_both, W_O_both) @ W_U
+print(f"Fraction of the time that the best logit is on the diagonal: {top_1_acc(W_OV_eff):.4f}")
+
 #%% QK prev-token circuit
 # W_QK_h = (W_Q_h)(W_K_h)^T is the QK circuit for head h and (W_E)(W_QK_h)(W_E)^T is the full QK circuit
 # order is slightly different from mathematical framework for transformers paper, why? (transformersLens library is different)
+layer = 0
+head_index = 7
 
+# compute full QK matrix for pos embedding
+W_pos = model.W_pos
+W_QK = model.W_Q[layer, head_index] @ model.W_K[layer, head_index].T
+pos_by_pos_scores = W_pos @ W_QK @ W_pos.T
+
+# mask, scale and softmax the scores
+mask = t.triu(t.ones_like(pos_by_pos_scores)).bool()
+pos_by_pos_pattern = t.where(mask, pos_by_pos_scores / model.cfg.d_head**0.5, -1.0e6).softmax(-1)
+
+print(f"Avg lower-diagonal value : {pos_by_pos_pattern.diag(-1).mean():.4f}")
+imshow(
+    utils.to_numpy(pos_by_pos_pattern[:200, :200]),
+    labels={"x":"Key", "y":"Query"},
+    title="Attention patterns for prev-token QK circuit, first 100 indices",
+    width = 700,
+    height=600
+)
 #%% K-composition circuit
 
 
