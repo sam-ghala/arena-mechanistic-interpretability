@@ -514,6 +514,11 @@ OV circuit of head 1.10 copies the value of the course token to the same output 
 # (describe the type of input it takes and what the output represents)
 """
 W_OV_h = 
+    Is at head h, the OV circuit, (W_V_h)(W_O_h)
+    (W_E)(W_OV_h)(W_U) is full OV circuit
+    Inputs it takes is v and o?
+    whats the difference between just W_OV and putting it inbetween the embedding and unembedding matrices
+    
 """
 #%% OV copying circuit
 # one hot encoding, zeros everywhere except one at the index A
@@ -591,5 +596,12 @@ imshow(
     height=600
 )
 #%% K-composition circuit
+def decompost_qk_input(cache: ActivationCache) -> Float[Tensor, "n_heads+2 posn d_model"]:
+    y0 = cache["embed"].unsqueeze(0)
+    y1 = cache["pos_embed"].unsqueeze(0)
+    y_rest = cache["result", 0].transpose(0, 1)
+
+    return t.concat([y0, y1, y_rest], dim=0)
+
 
 
