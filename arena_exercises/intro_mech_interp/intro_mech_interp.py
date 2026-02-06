@@ -518,7 +518,7 @@ W_OV_h =
     (W_E)(W_OV_h)(W_U) is full OV circuit
     Inputs it takes is v and o?
     whats the difference between just W_OV and putting it inbetween the embedding and unembedding matrices
-    
+
 """
 #%% OV copying circuit
 # one hot encoding, zeros everywhere except one at the index A
@@ -596,12 +596,88 @@ imshow(
     height=600
 )
 #%% K-composition circuit
-def decompost_qk_input(cache: ActivationCache) -> Float[Tensor, "n_heads+2 posn d_model"]:
+def decomposed_qk_input(cache: ActivationCache) -> Float[Tensor, "n_heads+2 posn d_model"]:
     y0 = cache["embed"].unsqueeze(0)
     y1 = cache["pos_embed"].unsqueeze(0)
     y_rest = cache["result", 0].transpose(0, 1)
 
     return t.concat([y0, y1, y_rest], dim=0)
 
+def decompose_q(
+        decomposed_qk_input : Float[Tensor, "n_heads+2 posn d_model"],
+        ind_head_index: int, 
+        model : HookedTransformer,
+) -> Float[Tensor, "n_heads+2 posn d_head"]:
+    W_Q = model.W_Q[1, ind_head_index]
+    return einops.einsum(decomposed_qk_input, W_Q, "n seq d_model, d_model d_head -> n seq d_head")
 
+def decompose_k(
+        decomposed_qk_input: Float[Tensor, "n_heads+2 posn d_model"],
+        ind_head_index: int,
+        model : HookedTransformer,
+) -> Float[Tensor, "n_heads+2 posn d_head"]:
+    W_K = model.W_K[1, ind_head_index]
+    return einops.einsum(
+        decomposed_qk_input,
+        W_K,
+        "n seq d_model, d_model d_head -> n seq d_head"
+    )
 
+seq_len = 50
+batch_size = 1
+(rep_tokens, rep_logits, rep_cache) = run_and_cache_model_repeated_tokens(model, seq_len, batch_size)
+rep_cache.remove_batch_dim()
+
+ind_head_index = 4
+
+decomposed_qk_input = decomposed_qk_input(rep_cache)
+decomposed_q = decompose_q(decomposed_qk_input, ind_head_index, model)
+decomposed_k = decompose_k(decomposed_qk_input, ind_head_index, model)
+
+component_labels = ["Embed", "PosEmbed"] + [f"0.{h}" for h in range(model.cfg.n_heads)]
+for decomposed_input, name in [(decompose_q, "query"), (decompose_k, "key")]:
+    imshow(
+        utils.to_numpy(decomposed_input.pow(2).sum([-1])),
+        label={"x":"Position", "y":"Component"},
+        y=component_labels,
+        width=800,
+        height=400
+    )
+# %% decompose attention scores
+def decompose_attn_scores(
+        decomposed_q : Float[Tensor, "q_comp q_pos d_head"],
+        decomposed_k : Float[Tensor, "k_comp k_pos d_head"],
+        model : HookedTransformer,
+) -> Float[Tensor, "q_comp k_comp q_pos k_pos"]:
+    return einops.einsum(
+        decompose_q,
+        decompose_k,
+        "q_comp q_pos d_head, k_comp k_pos d_head -> q_comp k_comp q_pos k_pos"
+    ) / (model.cfg.d_head**0.5)
+
+decomposed_scores = decompose_attn_scores(decompose_q, decompose_k, model)
+q_label = "Embed"
+k_label = "0.7"
+decomposed_scores_from_pair = decomposed_scores[
+    component_labels.index(q_label), component_labels.index(k_label)
+]
+imshow(
+    utils.to_numpy(t.tril(decomposed_scores_from_pair)),
+    title=f"Attention score contributions from query = {q_label}, key = {k_label}<br>(by query & key sequence positions)",
+    width=700
+)
+
+decomposed_stds = einops.reduce(
+    decomposed_scores,
+    "query_decomp, key_decomp query_pos key_pos -> query_decomp key_decomp",
+    t.std
+)
+imshow(
+    utils.to_numpy(decomposed_stds),
+    labels={"x":"Key Component", "y":"QUery Component"},
+    title="std dev of attn score contributions across sequence positions<br>(by query & key comp)",
+    z=component_labels,
+    y=component_labels,
+    width=700
+)
+#%% Still attention score contributions
