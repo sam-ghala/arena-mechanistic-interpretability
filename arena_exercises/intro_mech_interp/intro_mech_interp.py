@@ -703,3 +703,24 @@ for i in range(0, full_seq_len * len(component_labels), full_seq_len):
     fig.add_vline(x=i, line_color="black", line_width=1)
 
 fig.show(config={"staticPlot": True})
+#%% K - comp circuit
+def find_K_comp_circuit(
+        model : HookedTransformer,
+        prev_token_head_index: int,
+        ind_head_index : int
+) -> FactoredMatrix:
+    W_E = model.W_E
+    W_Q = model.W_O[1, ind_head_index]
+    W_K = model.W_K[1, ind_head_index]
+    W_O = model.W_O[0, prev_token_head_index]
+    W_V = model.W_V[0, prev_token_head_index]
+
+    Q = W_E @ W_Q
+    K = W_E @ W_V @ W_K
+    return FactoredMatrix(Q, K.T)
+
+prev_token_head_index = 7
+ind_head_index = 4
+K_comp_circuit = find_K_comp_circuit(model, prev_token_head_index, ind_head_index)
+print(f"Token frac wehre max-activating key equals same token: {top_1_acc(K_comp_circuit.T):.4f}")
+
